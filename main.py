@@ -1,23 +1,23 @@
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form
 from fastapi.responses import PlainTextResponse
-import google.generativeai as genai
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
 import os
 import json
 import httpx
+from google import genai
 
 app = FastAPI()
 
-# Firebase init
-cred = credentials.Certificate("firebase_key.json")
+# Firebase init desde variable de entorno
+firebase_key = json.loads(os.environ["FIREBASE_KEY"])
+cred = credentials.Certificate(firebase_key)
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 # Gemini init
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel("gemini-2.0-flash")
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 @app.get("/")
 def root():
@@ -32,25 +32,8 @@ async def recibir_grabacion(
 ):
     texto = TranscriptionText
 
-    # Si no hay transcripción, descargar y transcribir con Gemini
-    if not texto and RecordingUrl:
-        try:
-            async with httpx.AsyncClient() as client:
-                audio_resp = await client.get(RecordingUrl + ".mp3")
-            audio_bytes = audio_resp.content
-
-            # Usar Gemini para transcribir
-            audio_part = {"mime_type": "audio/mp3", "data": audio_bytes}
-            trans_resp = model.generate_content([
-                "Transcribe exactamente lo que dice esta grabación de voz en español.",
-                audio_part
-            ])
-            texto = trans_resp.text
-        except Exception as e:
-            texto = f"Error transcribiendo: {str(e)}"
-
     if not texto:
-        return "<?xml version='1.0' encoding='UTF-8'?><Response></Response>"
+        texto = "No se pudo obtener el texto de la llamada"
 
     # Extraer producto y cantidad con Gemini
     prompt = f"""Eres un extractor de datos para una tienda. 
@@ -61,7 +44,10 @@ Formato exacto: {{"producto": "nombre del producto", "cantidad": numero}}
 Texto: {texto}"""
 
     try:
-        resp = model.generate_content(prompt)
+        resp = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
         raw = resp.text.strip().replace("```json", "").replace("```", "").strip()
         datos = json.loads(raw)
     except Exception as e:
