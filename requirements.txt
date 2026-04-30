@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+google-generativeai
+firebase-admin
+httpx
+streamlit
+pandas
+python-multipart
