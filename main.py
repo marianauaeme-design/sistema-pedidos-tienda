@@ -51,7 +51,7 @@ async def ver_inventario():
         return JSONResponse({"error": str(e)})
 
 @app.get("/precio")
-async def consultar_precio(producto: str = ""):
+async def consultar_precio_get(producto: str = ""):
     if not producto:
         return JSONResponse({"error": "Producto no especificado"})
     inventario = buscar_en_inventario(producto)
@@ -70,6 +70,41 @@ async def consultar_precio(producto: str = ""):
         return JSONResponse({
             "disponible": False,
             "mensaje": f"Lo sentimos, no encontramos {producto} en nuestro inventario."
+        })
+
+@app.post("/precio")
+async def consultar_precio_post(request: Request):
+    try:
+        body = await request.json()
+        # Vapi envía los argumentos de la tool aquí
+        producto = ""
+        # Intentar extraer de diferentes formatos
+        if "producto" in body:
+            producto = body["producto"]
+        elif "message" in body:
+            tool_calls = body["message"].get("toolCalls", [])
+            if tool_calls:
+                args = tool_calls[0].get("function", {}).get("arguments", {})
+                if isinstance(args, str):
+                    args = json.loads(args)
+                producto = args.get("producto", "")
+    except:
+        producto = ""
+
+    if not producto:
+        return JSONResponse({"result": "No se especificó el producto"})
+
+    inventario = buscar_en_inventario(producto)
+    if inventario.get("disponible"):
+        precio = inventario.get("precio", 0)
+        cantidad_disponible = inventario.get("cantidad", 0)
+        nombre = inventario.get("nombre", producto)
+        return JSONResponse({
+            "result": f"El precio de {nombre} es ${precio} pesos. Tenemos {cantidad_disponible} unidades disponibles."
+        })
+    else:
+        return JSONResponse({
+            "result": f"Lo sentimos, no encontramos {producto} en nuestro inventario."
         })
 
 @app.post("/vapi")
