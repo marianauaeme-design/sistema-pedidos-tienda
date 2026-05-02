@@ -126,3 +126,28 @@ Conversación:
 
     db.collection("pedidos").add(pedido)
     return JSONResponse({"status": "ok"})
+
+@app.get("/precio")
+async def consultar_precio(producto: str = ""):
+    """Endpoint para que Vapi consulte el precio de un producto"""
+    if not producto:
+        return JSONResponse({"error": "Producto no especificado"})
+    
+    inventario = buscar_en_inventario(producto)
+    
+    if inventario.get("disponible"):
+        precio = inventario.get("precio", 0)
+        cantidad_disponible = inventario.get("cantidad", 0)
+        nombre = inventario.get("nombre", producto)
+        return JSONResponse({
+            "disponible": True,
+            "nombre": nombre,
+            "precio": precio,
+            "cantidad_disponible": cantidad_disponible,
+            "mensaje": f"El precio de {nombre} es ${precio} pesos. Tenemos {cantidad_disponible} unidades disponibles."
+        })
+    else:
+        return JSONResponse({
+            "disponible": False,
+            "mensaje": f"Lo sentimos, no encontramos {producto} en nuestro inventario."
+        })
