@@ -26,7 +26,7 @@ def buscar_en_inventario(producto_nombre):
             if any(word in nombre for word in palabras):
                 return {"id": doc.id, "disponible": True, **d}
         return {"disponible": False}
-    except Exception as e:
+    except:
         return {"disponible": False}
 
 def actualizar_inventario(doc_id, cantidad_pedida, cantidad_actual):
@@ -58,23 +58,22 @@ async def recibir_vapi(request: Request):
     if not transcript:
         return JSONResponse({"status": "ok"})
 
-    # Extraer todo lo que dijo el usuario
-    user_lines = []
-    for line in transcript.split("\n"):
-        line = line.strip()
-        if line.startswith("User:"):
-            user_lines.append(line.replace("User:", "").strip())
-    
-    user_text = " ".join(user_lines) if user_lines else transcript
+    # Usar Gemini para analizar toda la conversación
+    prompt = f"""Analiza esta conversación de una tienda en México y extrae:
+1. El pedido FINAL confirmado por el cliente (ignorando correcciones anteriores)
+2. La forma de pago mencionada (efectivo o tarjeta)
 
-    # Usar Gemini para extraer TODOS los productos del pedido
-    prompt = f"""Eres un extractor de datos para una tienda en Mexico.
-Del siguiente texto extrae el pedido completo del cliente.
-Lista todos los productos mencionados.
 Responde SOLO con JSON puro sin backticks ni markdown.
-Formato: {{"producto": "producto principal o lista separada por comas", "cantidad": numero total de items}}
+Formato exacto:
+{{
+  "productos": "lista de productos separados por coma",
+  "cantidad_total": numero total de items,
+  "forma_pago": "Efectivo" o "Tarjeta" o "No especificado",
+  "producto_principal": "nombre del primer producto"
+}}
 
-Texto del cliente: {user_text}"""
+Conversación:
+{transcript}"""
 
     try:
         resp = client.models.generate_content(
@@ -84,16 +83,23 @@ Texto del cliente: {user_text}"""
         raw = resp.text.strip().replace("```json", "").replace("```", "").strip()
         datos = json.loads(raw)
     except Exception as e:
-        datos = {"producto": "No identificado", "cantidad": 0}
+        datos = {
+            "productos": "No identificado",
+            "cantidad_total": 0,
+            "forma_pago": "No especificado",
+            "producto_principal": "No identificado"
+        }
 
-    producto = datos.get("producto", "No identificado")
-    cantidad = datos.get("cantidad", 0)
+    producto = datos.get("productos", "No identificado")
+    cantidad = datos.get("cantidad_total", 0)
+    forma_pago = datos.get("forma_pago", "No especificado")
+    producto_principal = datos.get("producto_principal", producto)
 
     # Verificar inventario del producto principal
-    inventario = buscar_en_inventario(producto.split(",")[0])
+    inventario = buscar_en_inventario(producto_principal)
     estado = "Pendiente"
     precio_unit = 0
-    
+
     if inventario.get("disponible"):
         cantidad_disponible = inventario.get("cantidad", 0)
         precio_unit = inventario.get("precio", 0)
@@ -112,6 +118,7 @@ Texto del cliente: {user_text}"""
         "cantidad": cantidad,
         "precio_unit": precio_unit,
         "total": total,
+        "forma_pago": forma_pago,
         "estado": estado,
         "transcripcion": transcript,
         "creado_en": datetime.now().isoformat()
