@@ -26,8 +26,8 @@ def buscar_en_inventario(producto_nombre):
             if any(word in nombre for word in palabras):
                 return {"id": doc.id, "disponible": True, **d}
         return {"disponible": False}
-    except:
-        return {"disponible": False}
+    except Exception as e:
+        return {"disponible": False, "error": str(e)}
 
 def actualizar_inventario(doc_id, cantidad_pedida, cantidad_actual):
     nueva_cantidad = max(0, cantidad_actual - cantidad_pedida)
@@ -36,6 +36,41 @@ def actualizar_inventario(doc_id, cantidad_pedida, cantidad_actual):
 @app.get("/")
 def root():
     return {"status": "Sistema de Pedidos activo ✅"}
+
+@app.get("/inventario")
+async def ver_inventario():
+    try:
+        docs = db.collection("inventario").stream()
+        productos = []
+        for doc in docs:
+            d = doc.to_dict()
+            d["id"] = doc.id
+            productos.append(d)
+        return JSONResponse({"productos": productos, "total": len(productos)})
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
+@app.get("/precio")
+async def consultar_precio(producto: str = ""):
+    if not producto:
+        return JSONResponse({"error": "Producto no especificado"})
+    inventario = buscar_en_inventario(producto)
+    if inventario.get("disponible"):
+        precio = inventario.get("precio", 0)
+        cantidad_disponible = inventario.get("cantidad", 0)
+        nombre = inventario.get("nombre", producto)
+        return JSONResponse({
+            "disponible": True,
+            "nombre": nombre,
+            "precio": precio,
+            "cantidad_disponible": cantidad_disponible,
+            "mensaje": f"El precio de {nombre} es ${precio} pesos. Tenemos {cantidad_disponible} unidades disponibles."
+        })
+    else:
+        return JSONResponse({
+            "disponible": False,
+            "mensaje": f"Lo sentimos, no encontramos {producto} en nuestro inventario."
+        })
 
 @app.post("/vapi")
 async def recibir_vapi(request: Request):
@@ -58,9 +93,8 @@ async def recibir_vapi(request: Request):
     if not transcript:
         return JSONResponse({"status": "ok"})
 
-    # Usar Gemini para analizar toda la conversación
     prompt = f"""Analiza esta conversación de una tienda en México y extrae:
-1. El pedido FINAL confirmado por el cliente (ignorando correcciones anteriores)
+1. El pedido FINAL confirmado por el cliente
 2. La forma de pago mencionada (efectivo o tarjeta)
 
 Responde SOLO con JSON puro sin backticks ni markdown.
@@ -82,7 +116,7 @@ Conversación:
         )
         raw = resp.text.strip().replace("```json", "").replace("```", "").strip()
         datos = json.loads(raw)
-    except Exception as e:
+    except Exception:
         datos = {
             "productos": "No identificado",
             "cantidad_total": 0,
@@ -95,7 +129,6 @@ Conversación:
     forma_pago = datos.get("forma_pago", "No especificado")
     producto_principal = datos.get("producto_principal", producto)
 
-    # Verificar inventario del producto principal
     inventario = buscar_en_inventario(producto_principal)
     estado = "Pendiente"
     precio_unit = 0
@@ -126,28 +159,3 @@ Conversación:
 
     db.collection("pedidos").add(pedido)
     return JSONResponse({"status": "ok"})
-
-@app.get("/precio")
-async def consultar_precio(producto: str = ""):
-    """Endpoint para que Vapi consulte el precio de un producto"""
-    if not producto:
-        return JSONResponse({"error": "Producto no especificado"})
-    
-    inventario = buscar_en_inventario(producto)
-    
-    if inventario.get("disponible"):
-        precio = inventario.get("precio", 0)
-        cantidad_disponible = inventario.get("cantidad", 0)
-        nombre = inventario.get("nombre", producto)
-        return JSONResponse({
-            "disponible": True,
-            "nombre": nombre,
-            "precio": precio,
-            "cantidad_disponible": cantidad_disponible,
-            "mensaje": f"El precio de {nombre} es ${precio} pesos. Tenemos {cantidad_disponible} unidades disponibles."
-        })
-    else:
-        return JSONResponse({
-            "disponible": False,
-            "mensaje": f"Lo sentimos, no encontramos {producto} en nuestro inventario."
-        })
