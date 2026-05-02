@@ -1,12 +1,10 @@
-from fastapi import FastAPI, Form
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import PlainTextResponse, JSONResponse
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
 import os
 import json
-import httpx
-import base64
 from google import genai
 
 app = FastAPI()
@@ -22,56 +20,36 @@ client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 def root():
     return {"status": "Sistema de Pedidos activo ✅"}
 
-@app.post("/twilio/recording", response_class=PlainTextResponse)
-async def recibir_grabacion(
-    RecordingUrl: str = Form(None),
-    From: str = Form(None),
-    Timestamp: str = Form(None),
-    TranscriptionText: str = Form(None),
-):
-    texto = None
+@app.post("/vapi")
+async def recibir_vapi(request: Request):
+    try:
+        body = await request.json()
+    except:
+        return JSONResponse({"status": "ok"})
 
-    if RecordingUrl:
-        try:
-            # Usar .wav en lugar de .mp3
-            url = RecordingUrl + ".wav"
-            async with httpx.AsyncClient() as http:
-                audio_resp = await http.get(url, timeout=30)
-            audio_b64 = base64.b64encode(audio_resp.content).decode("utf-8")
+    message = body.get("message", {})
+    msg_type = message.get("type", "")
 
-            trans_resp = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=[
-                    {
-                        "role": "user",
-                        "parts": [
-                            {
-                                "inline_data": {
-                                    "mime_type": "audio/wav",
-                                    "data": audio_b64
-                                }
-                            },
-                            {
-                                "text": "Transcribe en español exactamente lo que dice esta grabación. Solo escribe lo que se dice, sin explicaciones."
-                            }
-                        ]
-                    }
-                ]
-            )
-            texto = trans_resp.text.strip()
-        except Exception as e:
-            texto = TranscriptionText or f"Error: {str(e)}"
+    # Solo procesamos cuando termina la llamada
+    if msg_type != "end-of-call-report":
+        return JSONResponse({"status": "ok"})
 
-    if not texto:
-        texto = TranscriptionText or "No se pudo obtener el texto"
+    # Obtener transcripción y datos de la llamada
+    transcript = message.get("transcript", "")
+    call = message.get("call", {})
+    customer = call.get("customer", {})
+    telefono = customer.get("number", "Desconocido")
+    
+    if not transcript:
+        return JSONResponse({"status": "ok"})
 
-    # Extraer producto y cantidad
+    # Extraer producto y cantidad con Gemini
     prompt = f"""Eres un extractor de datos para una tienda en Mexico.
-Extrae el producto y la cantidad del siguiente texto en español.
+Extrae el producto y la cantidad del siguiente texto de una llamada en español.
 Responde SOLO con JSON puro sin backticks ni markdown.
 Formato: {{"producto": "nombre del producto", "cantidad": numero}}
 
-Texto: {texto}"""
+Texto: {transcript}"""
 
     try:
         resp = client.models.generate_content(
@@ -84,16 +62,25 @@ Texto: {texto}"""
         datos = {"producto": "No identificado", "cantidad": 0}
 
     pedido = {
-        "fecha": Timestamp or datetime.now().isoformat(),
-        "telefono": From or "Desconocido",
+        "fecha": datetime.now().isoformat(),
+        "telefono": telefono,
         "producto": datos.get("producto", "No identificado"),
         "cantidad": datos.get("cantidad", 0),
         "precio_unit": 0,
         "total": 0,
         "estado": "Pendiente",
-        "transcripcion": texto,
+        "transcripcion": transcript,
         "creado_en": datetime.now().isoformat()
     }
 
     db.collection("pedidos").add(pedido)
+    return JSONResponse({"status": "ok"})
+
+@app.post("/twilio/recording", response_class=PlainTextResponse)
+async def recibir_twilio(
+    RecordingUrl: str = Form(None),
+    From: str = Form(None),
+    Timestamp: str = Form(None),
+    TranscriptionText: str = Form(None),
+):
     return "<?xml version='1.0' encoding='UTF-8'?><Response></Response>"
