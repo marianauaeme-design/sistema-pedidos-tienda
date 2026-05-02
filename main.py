@@ -5,7 +5,6 @@ from firebase_admin import credentials, firestore
 from datetime import datetime
 import os
 import json
-import re
 from google import genai
 
 app = FastAPI()
@@ -16,6 +15,25 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+def buscar_en_inventario(producto_nombre):
+    """Busca un producto en el inventario de Firebase"""
+    try:
+        docs = db.collection("inventario").stream()
+        for doc in docs:
+            d = doc.to_dict()
+            nombre = d.get("nombre", "").lower()
+            # Buscar coincidencia parcial
+            if any(word in nombre for word in producto_nombre.lower().split()):
+                return {"id": doc.id, "disponible": True, **d}
+        return {"disponible": False}
+    except Exception as e:
+        return {"disponible": False, "error": str(e)}
+
+def actualizar_inventario(doc_id, cantidad_pedida, cantidad_actual):
+    """Reduce el inventario después de un pedido"""
+    nueva_cantidad = max(0, cantidad_actual - cantidad_pedida)
+    db.collection("inventario").document(doc_id).update({"cantidad": nueva_cantidad})
 
 @app.get("/")
 def root():
@@ -42,7 +60,7 @@ async def recibir_vapi(request: Request):
     if not transcript:
         return JSONResponse({"status": "ok"})
 
-    # Extraer solo lo que dijo el usuario (quitar "AI:" y "User:")
+    # Extraer solo lo que dijo el usuario
     user_text = ""
     for line in transcript.split("\n"):
         if line.strip().startswith("User:"):
@@ -53,10 +71,9 @@ async def recibir_vapi(request: Request):
 
     # Extraer producto y cantidad con Gemini
     prompt = f"""Eres un extractor de datos para una tienda en Mexico.
-Extrae TODOS los productos y cantidades del siguiente pedido en español.
-Si hay varios productos, pon el primero como "producto" y la cantidad total como "cantidad".
+Extrae el producto principal y la cantidad del siguiente pedido en español.
 Responde SOLO con JSON puro sin backticks ni markdown.
-Formato: {{"producto": "nombre del producto principal", "cantidad": numero}}
+Formato: {{"producto": "nombre del producto", "cantidad": numero}}
 
 Pedido: {user_text}"""
 
@@ -70,14 +87,36 @@ Pedido: {user_text}"""
     except Exception:
         datos = {"producto": "No identificado", "cantidad": 0}
 
+    producto = datos.get("producto", "No identificado")
+    cantidad = datos.get("cantidad", 0)
+
+    # Verificar inventario
+    inventario = buscar_en_inventario(producto)
+    estado = "Pendiente"
+    
+    if inventario.get("disponible"):
+        cantidad_disponible = inventario.get("cantidad", 0)
+        precio_unit = inventario.get("precio", 0)
+        
+        if cantidad_disponible >= cantidad:
+            estado = "Confirmado"
+            # Actualizar inventario
+            actualizar_inventario(inventario["id"], cantidad, cantidad_disponible)
+        else:
+            estado = "Sin stock"
+    else:
+        precio_unit = 0
+
+    total = precio_unit * cantidad
+
     pedido = {
         "fecha": datetime.now().isoformat(),
         "telefono": telefono,
-        "producto": datos.get("producto", "No identificado"),
-        "cantidad": datos.get("cantidad", 0),
-        "precio_unit": 0,
-        "total": 0,
-        "estado": "Pendiente",
+        "producto": producto,
+        "cantidad": cantidad,
+        "precio_unit": precio_unit,
+        "total": total,
+        "estado": estado,
         "transcripcion": transcript,
         "creado_en": datetime.now().isoformat()
     }
