@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
 import os
 import json
+import re
 from google import genai
 
 app = FastAPI()
@@ -30,26 +31,34 @@ async def recibir_vapi(request: Request):
     message = body.get("message", {})
     msg_type = message.get("type", "")
 
-    # Solo procesamos cuando termina la llamada
     if msg_type != "end-of-call-report":
         return JSONResponse({"status": "ok"})
 
-    # Obtener transcripción y datos de la llamada
     transcript = message.get("transcript", "")
     call = message.get("call", {})
     customer = call.get("customer", {})
     telefono = customer.get("number", "Desconocido")
-    
+
     if not transcript:
         return JSONResponse({"status": "ok"})
 
+    # Extraer solo lo que dijo el usuario (quitar "AI:" y "User:")
+    user_text = ""
+    for line in transcript.split("\n"):
+        if line.strip().startswith("User:"):
+            user_text += line.replace("User:", "").strip() + " "
+    
+    if not user_text:
+        user_text = transcript
+
     # Extraer producto y cantidad con Gemini
     prompt = f"""Eres un extractor de datos para una tienda en Mexico.
-Extrae el producto y la cantidad del siguiente texto de una llamada en español.
+Extrae TODOS los productos y cantidades del siguiente pedido en español.
+Si hay varios productos, pon el primero como "producto" y la cantidad total como "cantidad".
 Responde SOLO con JSON puro sin backticks ni markdown.
-Formato: {{"producto": "nombre del producto", "cantidad": numero}}
+Formato: {{"producto": "nombre del producto principal", "cantidad": numero}}
 
-Texto: {transcript}"""
+Pedido: {user_text}"""
 
     try:
         resp = client.models.generate_content(
@@ -75,12 +84,3 @@ Texto: {transcript}"""
 
     db.collection("pedidos").add(pedido)
     return JSONResponse({"status": "ok"})
-
-@app.post("/twilio/recording", response_class=PlainTextResponse)
-async def recibir_twilio(
-    RecordingUrl: str = Form(None),
-    From: str = Form(None),
-    Timestamp: str = Form(None),
-    TranscriptionText: str = Form(None),
-):
-    return "<?xml version='1.0' encoding='UTF-8'?><Response></Response>"
