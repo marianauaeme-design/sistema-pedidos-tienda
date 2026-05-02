@@ -17,21 +17,19 @@ db = firestore.client()
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 def buscar_en_inventario(producto_nombre):
-    """Busca un producto en el inventario de Firebase"""
     try:
         docs = db.collection("inventario").stream()
+        palabras = producto_nombre.lower().split()
         for doc in docs:
             d = doc.to_dict()
             nombre = d.get("nombre", "").lower()
-            # Buscar coincidencia parcial
-            if any(word in nombre for word in producto_nombre.lower().split()):
+            if any(word in nombre for word in palabras):
                 return {"id": doc.id, "disponible": True, **d}
         return {"disponible": False}
     except Exception as e:
-        return {"disponible": False, "error": str(e)}
+        return {"disponible": False}
 
 def actualizar_inventario(doc_id, cantidad_pedida, cantidad_actual):
-    """Reduce el inventario después de un pedido"""
     nueva_cantidad = max(0, cantidad_actual - cantidad_pedida)
     db.collection("inventario").document(doc_id).update({"cantidad": nueva_cantidad})
 
@@ -60,22 +58,23 @@ async def recibir_vapi(request: Request):
     if not transcript:
         return JSONResponse({"status": "ok"})
 
-    # Extraer solo lo que dijo el usuario
-    user_text = ""
+    # Extraer todo lo que dijo el usuario
+    user_lines = []
     for line in transcript.split("\n"):
-        if line.strip().startswith("User:"):
-            user_text += line.replace("User:", "").strip() + " "
+        line = line.strip()
+        if line.startswith("User:"):
+            user_lines.append(line.replace("User:", "").strip())
     
-    if not user_text:
-        user_text = transcript
+    user_text = " ".join(user_lines) if user_lines else transcript
 
-    # Extraer producto y cantidad con Gemini
+    # Usar Gemini para extraer TODOS los productos del pedido
     prompt = f"""Eres un extractor de datos para una tienda en Mexico.
-Extrae el producto principal y la cantidad del siguiente pedido en español.
+Del siguiente texto extrae el pedido completo del cliente.
+Lista todos los productos mencionados.
 Responde SOLO con JSON puro sin backticks ni markdown.
-Formato: {{"producto": "nombre del producto", "cantidad": numero}}
+Formato: {{"producto": "producto principal o lista separada por comas", "cantidad": numero total de items}}
 
-Pedido: {user_text}"""
+Texto del cliente: {user_text}"""
 
     try:
         resp = client.models.generate_content(
@@ -84,28 +83,25 @@ Pedido: {user_text}"""
         )
         raw = resp.text.strip().replace("```json", "").replace("```", "").strip()
         datos = json.loads(raw)
-    except Exception:
+    except Exception as e:
         datos = {"producto": "No identificado", "cantidad": 0}
 
     producto = datos.get("producto", "No identificado")
     cantidad = datos.get("cantidad", 0)
 
-    # Verificar inventario
-    inventario = buscar_en_inventario(producto)
+    # Verificar inventario del producto principal
+    inventario = buscar_en_inventario(producto.split(",")[0])
     estado = "Pendiente"
+    precio_unit = 0
     
     if inventario.get("disponible"):
         cantidad_disponible = inventario.get("cantidad", 0)
         precio_unit = inventario.get("precio", 0)
-        
         if cantidad_disponible >= cantidad:
             estado = "Confirmado"
-            # Actualizar inventario
             actualizar_inventario(inventario["id"], cantidad, cantidad_disponible)
         else:
             estado = "Sin stock"
-    else:
-        precio_unit = 0
 
     total = precio_unit * cantidad
 
