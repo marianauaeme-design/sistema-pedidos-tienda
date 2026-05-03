@@ -6,6 +6,8 @@ from datetime import datetime
 import os
 import json
 from google import genai
+import gspread
+from google.oauth2.service_account import Credentials
 
 app = FastAPI()
 
@@ -15,6 +17,33 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+# Google Sheets setup
+SHEET_ID = "1pyc0n_FIk6o9519kvSsQVUcZGYvu8qN45FZ5M12W0io"
+SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+
+def get_sheet():
+    creds = Credentials.from_service_account_info(firebase_key, scopes=SCOPES)
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(SHEET_ID)
+    return sh.sheet1
+
+def guardar_en_sheets(pedido):
+    try:
+        sheet = get_sheet()
+        row = [
+            pedido.get("fecha", ""),
+            pedido.get("telefono", ""),
+            pedido.get("producto", ""),
+            pedido.get("cantidad", 0),
+            pedido.get("precio_unit", 0),
+            pedido.get("total", 0),
+            pedido.get("forma_pago", ""),
+            pedido.get("estado", "")
+        ]
+        sheet.append_row(row)
+    except Exception as e:
+        print(f"Error guardando en Sheets: {e}")
 
 def buscar_en_inventario(producto_nombre):
     try:
@@ -76,9 +105,7 @@ async def consultar_precio_get(producto: str = ""):
 async def consultar_precio_post(request: Request):
     try:
         body = await request.json()
-        # Vapi envía los argumentos de la tool aquí
         producto = ""
-        # Intentar extraer de diferentes formatos
         if "producto" in body:
             producto = body["producto"]
         elif "message" in body:
@@ -192,5 +219,10 @@ Conversación:
         "creado_en": datetime.now().isoformat()
     }
 
+    # Guardar en Firebase
     db.collection("pedidos").add(pedido)
+    
+    # Guardar en Google Sheets
+    guardar_en_sheets(pedido)
+
     return JSONResponse({"status": "ok"})
