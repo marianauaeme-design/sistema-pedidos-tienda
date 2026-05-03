@@ -3,6 +3,6 @@ uvicorn
 google-genai
 firebase-admin
 httpx
-streamlit
-pandas
 python-multipart
+gspread
+google-auth
