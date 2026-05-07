@@ -1,110 +1,169 @@
-import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, firestore
-from datetime import datetime
-import pandas as pd
-import os
-import json
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sistema de Pedidos - Tienda Don Pepe</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: Arial, sans-serif; background: #f5f5f5; color: #333; }
+  header { background: #2c7a4b; color: white; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 20px; }
+  header span { font-size: 13px; opacity: 0.8; }
+  .container { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+  .stat-card { background: white; border-radius: 8px; padding: 16px; text-align: center; border: 1px solid #e0e0e0; }
+  .stat-card .num { font-size: 28px; font-weight: bold; color: #2c7a4b; }
+  .stat-card .label { font-size: 12px; color: #888; margin-top: 4px; }
+  .table-card { background: white; border-radius: 8px; border: 1px solid #e0e0e0; overflow: hidden; }
+  .table-card h2 { padding: 16px 20px; font-size: 16px; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; }
+  .refresh-btn { background: #2c7a4b; color: white; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #f9f9f9; padding: 10px 16px; text-align: left; font-size: 12px; color: #666; border-bottom: 1px solid #e0e0e0; }
+  td { padding: 10px 16px; font-size: 13px; border-bottom: 1px solid #f0f0f0; }
+  tr:hover { background: #f9f9f9; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+  .badge-confirmado { background: #d4edda; color: #155724; }
+  .badge-pendiente { background: #fff3cd; color: #856404; }
+  .badge-sinstock { background: #f8d7da; color: #721c24; }
+  .print-btn { background: #2c7a4b; color: white; border: none; padding: 5px 12px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+  .print-btn:hover { background: #235f3a; }
+  .loading { text-align: center; padding: 40px; color: #888; }
+  @media (max-width: 600px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛒 Sistema de Pedidos</h1>
+  <span id="ultima-act">Cargando...</span>
+</header>
+<div class="container">
+  <div class="stats">
+    <div class="stat-card"><div class="num" id="total-pedidos">-</div><div class="label">Total pedidos</div></div>
+    <div class="stat-card"><div class="num" id="confirmados">-</div><div class="label">Confirmados</div></div>
+    <div class="stat-card"><div class="num" id="pendientes">-</div><div class="label">Pendientes</div></div>
+    <div class="stat-card"><div class="num" id="total-ventas">-</div><div class="label">Total ventas</div></div>
+  </div>
+  <div class="table-card">
+    <h2>Pedidos recientes <button class="refresh-btn" onclick="cargarPedidos()">↻ Actualizar</button></h2>
+    <div id="tabla-container"><div class="loading">Cargando pedidos...</div></div>
+  </div>
+</div>
+<script>
+const API = '';
 
-st.set_page_config(page_title="Sistema de Pedidos", page_icon="🛒", layout="wide")
+async function cargarPedidos() {
+  document.getElementById('tabla-container').innerHTML = '<div class="loading">Cargando...</div>';
+  try {
+    const res = await fetch(API + '/pedidos');
+    const data = await res.json();
+    renderTabla(data.pedidos);
+    actualizarStats(data.pedidos);
+    document.getElementById('ultima-act').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
+  } catch(e) {
+    document.getElementById('tabla-container').innerHTML = '<div class="loading">Error cargando pedidos. Verifica la conexión.</div>';
+  }
+}
 
-# Firebase init (solo una vez)
-if not firebase_admin._apps:
-    # En Railway usamos variable de entorno, en local usamos archivo
-    if os.path.exists("firebase_key.json"):
-        cred = credentials.Certificate("firebase_key.json")
-    else:
-        firebase_key = json.loads(os.environ["FIREBASE_KEY"])
-        cred = credentials.Certificate(firebase_key)
-    firebase_admin.initialize_app(cred)
+function actualizarStats(pedidos) {
+  document.getElementById('total-pedidos').textContent = pedidos.length;
+  document.getElementById('confirmados').textContent = pedidos.filter(p => p.estado === 'Confirmado').length;
+  document.getElementById('pendientes').textContent = pedidos.filter(p => p.estado === 'Pendiente').length;
+  const total = pedidos.reduce((sum, p) => sum + (parseFloat(p.total) || 0), 0);
+  document.getElementById('total-ventas').textContent = '$' + total.toFixed(0);
+}
 
-db = firestore.client()
+function renderTabla(pedidos) {
+  if (!pedidos || pedidos.length === 0) {
+    document.getElementById('tabla-container').innerHTML = '<div class="loading">No hay pedidos aún.</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Fecha</th><th>Teléfono</th><th>Producto</th><th>Cant</th><th>Total</th><th>Pago</th><th>Estado</th><th>Ticket</th></tr></thead><tbody>';
+  pedidos.slice().reverse().forEach((p, i) => {
+    const badgeClass = p.estado === 'Confirmado' ? 'badge-confirmado' : p.estado === 'Sin stock' ? 'badge-sinstock' : 'badge-pendiente';
+    html += `<tr>
+      <td>${p.fecha || ''}</td>
+      <td>${p.telefono || ''}</td>
+      <td>${p.producto || ''}</td>
+      <td>${p.cantidad || 0}</td>
+      <td>$${parseFloat(p.total || 0).toFixed(0)}</td>
+      <td>${p.forma_pago || ''}</td>
+      <td><span class="badge ${badgeClass}">${p.estado || ''}</span></td>
+      <td><button class="print-btn" onclick='imprimirTicket(${JSON.stringify(p)})'>🖨 Ticket</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('tabla-container').innerHTML = html;
+}
 
-# Cargar pedidos
-def cargar_pedidos():
-    docs = db.collection("pedidos").order_by("creado_en", direction=firestore.Query.DESCENDING).stream()
-    pedidos = []
-    for doc in docs:
-        d = doc.to_dict()
-        d["id"] = doc.id
-        pedidos.append(d)
-    return pedidos
+function imprimirTicket(pedido) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: [58, 150] });
+  const w = 58;
+  let y = 5;
 
-# Actualizar estado
-def actualizar_estado(doc_id, nuevo_estado):
-    db.collection("pedidos").document(doc_id).update({"estado": nuevo_estado})
+  doc.setFontSize(9);
+  doc.setFont('courier', 'bold');
+  doc.text('TIENDA DON PEPE', w/2, y, { align: 'center' }); y += 4;
+  doc.setFont('courier', 'normal');
+  doc.setFontSize(7);
+  doc.text('Calle Juarez #45, Col. Centro', w/2, y, { align: 'center' }); y += 3.5;
+  doc.text('Tultepec, Mexico', w/2, y, { align: 'center' }); y += 3.5;
+  doc.text('Tel: 729-123-4567', w/2, y, { align: 'center' }); y += 5;
 
-# Header
-st.title("🛒 Sistema de Pedidos por Llamada")
-st.markdown("---")
+  doc.setLineDashPattern([1, 1], 0);
+  doc.line(2, y, w-2, y); y += 4;
 
-# Cargar datos
-pedidos = cargar_pedidos()
+  doc.setFontSize(7);
+  doc.text('Fecha: ' + (pedido.fecha || ''), 3, y); y += 3.5;
+  doc.text('Tel: ' + (pedido.telefono || ''), 3, y); y += 5;
 
-if not pedidos:
-    st.info("No hay pedidos aún.")
-else:
-    df = pd.DataFrame(pedidos)
+  doc.line(2, y, w-2, y); y += 4;
 
-    # Métricas
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Pedidos", len(df))
-    with col2:
-        pendientes = len(df[df["estado"] == "Pendiente"])
-        st.metric("Pendientes", pendientes)
-    with col3:
-        completados = len(df[df["estado"] == "Completado"])
-        st.metric("Completados", completados)
-    with col4:
-        total_productos = df["cantidad"].sum()
-        st.metric("Total Productos", int(total_productos))
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(7);
+  doc.text('Producto', 3, y);
+  doc.text('Cant', 36, y);
+  doc.text('Total', 46, y);
+  y += 2;
+  doc.line(2, y, w-2, y); y += 3;
 
-    st.markdown("---")
+  doc.setFont('courier', 'normal');
+  const productos = (pedido.producto || '').split(',');
+  productos.forEach(prod => {
+    doc.text(prod.trim().substring(0, 20), 3, y);
+    doc.text(String(pedido.cantidad || 0), 36, y);
+    doc.text('$' + parseFloat(pedido.total || 0).toFixed(0), 46, y);
+    y += 4;
+  });
 
-    # Estadísticas
-    st.subheader("📊 Estadísticas")
-    col1, col2 = st.columns(2)
+  y += 1;
+  doc.line(2, y, w-2, y); y += 4;
 
-    with col1:
-        st.markdown("**Productos más pedidos**")
-        if "producto" in df.columns:
-            top_productos = df.groupby("producto")["cantidad"].sum().sort_values(ascending=False).head(5)
-            st.bar_chart(top_productos)
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(9);
+  doc.text('TOTAL: $' + parseFloat(pedido.total || 0).toFixed(0) + ' MXN', w/2, y, { align: 'center' }); y += 5;
 
-    with col2:
-        st.markdown("**Pedidos por estado**")
-        estado_counts = df["estado"].value_counts()
-        st.bar_chart(estado_counts)
+  doc.setFont('courier', 'normal');
+  doc.setFontSize(7);
+  doc.text('Pago: ' + (pedido.forma_pago || 'No especificado'), w/2, y, { align: 'center' }); y += 5;
 
-    st.markdown("---")
+  doc.setLineDashPattern([1, 1], 0);
+  doc.line(2, y, w-2, y); y += 4;
 
-    # Tabla de pedidos
-    st.subheader("📋 Pedidos Recientes")
+  doc.setFontSize(8);
+  doc.setFont('courier', 'bold');
+  doc.text('¡Gracias por su compra!', w/2, y, { align: 'center' }); y += 4;
+  doc.setFont('courier', 'normal');
+  doc.setFontSize(6);
+  doc.text('Conserve su ticket', w/2, y, { align: 'center' });
 
-    for pedido in pedidos[:20]:
-        with st.expander(f"📞 {pedido.get('telefono')} — {pedido.get('producto')} x{pedido.get('cantidad')} — {pedido.get('estado')}"):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**Fecha:** {pedido.get('fecha', 'N/A')}")
-                st.write(f"**Teléfono:** {pedido.get('telefono', 'N/A')}")
-                st.write(f"**Producto:** {pedido.get('producto', 'N/A')}")
-                st.write(f"**Cantidad:** {pedido.get('cantidad', 0)}")
-            with col2:
-                st.write(f"**Estado:** {pedido.get('estado', 'N/A')}")
-                if pedido.get("transcripcion"):
-                    st.write(f"**Transcripción:** {pedido.get('transcripcion')}")
+  doc.save('ticket-pedido.pdf');
+}
 
-                nuevo_estado = st.selectbox(
-                    "Cambiar estado",
-                    ["Pendiente", "En proceso", "Completado", "Cancelado"],
-                    key=pedido["id"]
-                )
-                if st.button("Actualizar", key=f"btn_{pedido['id']}"):
-                    actualizar_estado(pedido["id"], nuevo_estado)
-                    st.success("Estado actualizado ✅")
-                    st.rerun()
-
-# Botón refrescar
-if st.button("🔄 Refrescar pedidos"):
-    st.rerun()
+cargarPedidos();
+setInterval(cargarPedidos, 60000);
+</script>
+</body>
+</html>
