@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from datetime import datetime
 import os
 import json
+import traceback
 from google import genai
 import gspread
 from google.oauth2.service_account import Credentials
@@ -11,16 +12,16 @@ app = FastAPI()
 
 SHEET_ID = "1pyc0n_FIk6o9519kvSsQVUcZGYvu8qN45FZ5M12W0io"
 SCOPES = [
-    "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
 
-firebase_key = json.loads(os.environ["FIREBASE_KEY"])
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+# Usamos GOOGLE_KEY para las credenciales de Google
+google_key = json.loads(os.environ.get("FIREBASE_KEY", "{}"))
+gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 def get_sheets():
-    creds = Credentials.from_service_account_info(firebase_key, scopes=SCOPES)
+    creds = Credentials.from_service_account_info(google_key, scopes=SCOPES)
     gc = gspread.authorize(creds)
     return gc.open_by_key(SHEET_ID)
 
@@ -34,6 +35,7 @@ def get_config():
             config[row.get("Campo", "")] = row.get("Valor", "")
         return config
     except Exception as e:
+        print(f"Error config: {e}")
         return {}
 
 def buscar_en_inventario(producto_nombre):
@@ -45,16 +47,17 @@ def buscar_en_inventario(producto_nombre):
         for row in registros:
             nombre = str(row.get("Producto", "")).lower()
             disponible = str(row.get("Disponible", "")).lower()
-            stock = int(row.get("Stock", 0))
+            stock = int(row.get("Stock", 0) or 0)
             if any(word in nombre for word in palabras):
                 return {
                     "disponible": disponible in ["si", "sí", "yes", "true", "1"],
                     "nombre": row.get("Producto", ""),
-                    "precio": float(row.get("Precio", 0)),
+                    "precio": float(row.get("Precio", 0) or 0),
                     "stock": stock
                 }
         return {"disponible": False}
     except Exception as e:
+        traceback.print_exc()
         return {"disponible": False, "error": str(e)}
 
 def guardar_pedido(pedido):
@@ -71,12 +74,24 @@ def guardar_pedido(pedido):
             pedido.get("estado", "")
         ]
         hoja.append_row(row)
+        print(f"Pedido guardado: {row}")
     except Exception as e:
-        import traceback; traceback.print_exc(); print(f"Error guardando pedido: {str(e)}")
+        traceback.print_exc()
+        print(f"Error guardando pedido: {str(e)}")
 
 @app.get("/")
 def root():
     return {"status": "Sistema de Pedidos activo ✅"}
+
+@app.get("/test-sheets")
+async def test_sheets():
+    try:
+        sh = get_sheets()
+        hojas = [ws.title for ws in sh.worksheets()]
+        return JSONResponse({"ok": True, "hojas": hojas})
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "error": str(e)})
 
 @app.get("/precio")
 async def consultar_precio_get(producto: str = ""):
@@ -87,14 +102,12 @@ async def consultar_precio_get(producto: str = ""):
         precio = inventario.get("precio", 0)
         stock = inventario.get("stock", 0)
         nombre = inventario.get("nombre", producto)
-        config = get_config()
-        moneda = config.get("Moneda", "MXN")
         return JSONResponse({
             "disponible": True,
             "nombre": nombre,
             "precio": precio,
             "stock": stock,
-            "mensaje": f"El precio de {nombre} es ${precio} {moneda}. Tenemos {stock} unidades disponibles."
+            "mensaje": f"El precio de {nombre} es ${precio} pesos. Tenemos {stock} unidades disponibles."
         })
     else:
         return JSONResponse({
@@ -173,7 +186,7 @@ Conversación:
 {transcript}"""
 
     try:
-        resp = client.models.generate_content(
+        resp = gemini_client.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt
         )
@@ -214,8 +227,7 @@ Conversación:
         "precio_unit": precio_unit,
         "total": total,
         "forma_pago": forma_pago,
-        "estado": estado,
-        "transcripcion": transcript
+        "estado": estado
     }
 
     guardar_pedido(pedido)
