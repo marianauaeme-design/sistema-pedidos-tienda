@@ -1,54 +1,82 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-import firebase_admin
-from firebase_admin import credentials, firestore
 from datetime import datetime
 import os
 import json
 from google import genai
+import gspread
+from google.oauth2.service_account import Credentials
 
 app = FastAPI()
 
-firebase_key = json.loads(os.environ["FIREBASE_KEY"])
-cred = credentials.Certificate(firebase_key)
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+SHEET_ID = "1pyc0n_FIk6o9519kvSsQVUcZGYvu8qN45FZ5M12W0io"
+SCOPES = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
+firebase_key = json.loads(os.environ["FIREBASE_KEY"])
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+def get_sheets():
+    creds = Credentials.from_service_account_info(firebase_key, scopes=SCOPES)
+    gc = gspread.authorize(creds)
+    return gc.open_by_key(SHEET_ID)
+
+def get_config():
+    try:
+        sh = get_sheets()
+        hoja = sh.worksheet("Configuracion")
+        registros = hoja.get_all_records()
+        config = {}
+        for row in registros:
+            config[row.get("Campo", "")] = row.get("Valor", "")
+        return config
+    except Exception as e:
+        return {}
 
 def buscar_en_inventario(producto_nombre):
     try:
-        docs = db.collection("inventario").stream()
+        sh = get_sheets()
+        hoja = sh.worksheet("Inventario")
+        registros = hoja.get_all_records()
         palabras = producto_nombre.lower().split()
-        for doc in docs:
-            d = doc.to_dict()
-            nombre = d.get("nombre", "").lower()
+        for row in registros:
+            nombre = str(row.get("Producto", "")).lower()
+            disponible = str(row.get("Disponible", "")).lower()
+            stock = int(row.get("Stock", 0))
             if any(word in nombre for word in palabras):
-                return {"id": doc.id, "disponible": True, **d}
+                return {
+                    "disponible": disponible in ["si", "sí", "yes", "true", "1"],
+                    "nombre": row.get("Producto", ""),
+                    "precio": float(row.get("Precio", 0)),
+                    "stock": stock
+                }
         return {"disponible": False}
     except Exception as e:
         return {"disponible": False, "error": str(e)}
 
-def actualizar_inventario(doc_id, cantidad_pedida, cantidad_actual):
-    nueva_cantidad = max(0, cantidad_actual - cantidad_pedida)
-    db.collection("inventario").document(doc_id).update({"cantidad": nueva_cantidad})
+def guardar_pedido(pedido):
+    try:
+        sh = get_sheets()
+        hoja = sh.worksheet("Pedidos")
+        row = [
+            pedido.get("fecha", ""),
+            pedido.get("telefono", ""),
+            pedido.get("producto", ""),
+            pedido.get("cantidad", 0),
+            pedido.get("precio_unit", 0),
+            pedido.get("total", 0),
+            pedido.get("estado", "")
+        ]
+        hoja.append_row(row)
+    except Exception as e:
+        print(f"Error guardando pedido: {e}")
 
 @app.get("/")
 def root():
     return {"status": "Sistema de Pedidos activo ✅"}
-
-@app.get("/inventario")
-async def ver_inventario():
-    try:
-        docs = db.collection("inventario").stream()
-        productos = []
-        for doc in docs:
-            d = doc.to_dict()
-            d["id"] = doc.id
-            productos.append(d)
-        return JSONResponse({"productos": productos, "total": len(productos)})
-    except Exception as e:
-        return JSONResponse({"error": str(e)})
 
 @app.get("/precio")
 async def consultar_precio_get(producto: str = ""):
@@ -57,14 +85,16 @@ async def consultar_precio_get(producto: str = ""):
     inventario = buscar_en_inventario(producto)
     if inventario.get("disponible"):
         precio = inventario.get("precio", 0)
-        cantidad_disponible = inventario.get("cantidad", 0)
+        stock = inventario.get("stock", 0)
         nombre = inventario.get("nombre", producto)
+        config = get_config()
+        moneda = config.get("Moneda", "MXN")
         return JSONResponse({
             "disponible": True,
             "nombre": nombre,
             "precio": precio,
-            "cantidad_disponible": cantidad_disponible,
-            "mensaje": f"El precio de {nombre} es ${precio} pesos. Tenemos {cantidad_disponible} unidades disponibles."
+            "stock": stock,
+            "mensaje": f"El precio de {nombre} es ${precio} {moneda}. Tenemos {stock} unidades disponibles."
         })
     else:
         return JSONResponse({
@@ -76,9 +106,7 @@ async def consultar_precio_get(producto: str = ""):
 async def consultar_precio_post(request: Request):
     try:
         body = await request.json()
-        # Vapi envía los argumentos de la tool aquí
         producto = ""
-        # Intentar extraer de diferentes formatos
         if "producto" in body:
             producto = body["producto"]
         elif "message" in body:
@@ -97,10 +125,10 @@ async def consultar_precio_post(request: Request):
     inventario = buscar_en_inventario(producto)
     if inventario.get("disponible"):
         precio = inventario.get("precio", 0)
-        cantidad_disponible = inventario.get("cantidad", 0)
+        stock = inventario.get("stock", 0)
         nombre = inventario.get("nombre", producto)
         return JSONResponse({
-            "result": f"El precio de {nombre} es ${precio} pesos. Tenemos {cantidad_disponible} unidades disponibles."
+            "result": f"El precio de {nombre} es ${precio} pesos. Tenemos {stock} unidades disponibles."
         })
     else:
         return JSONResponse({
@@ -169,18 +197,17 @@ Conversación:
     precio_unit = 0
 
     if inventario.get("disponible"):
-        cantidad_disponible = inventario.get("cantidad", 0)
+        stock = inventario.get("stock", 0)
         precio_unit = inventario.get("precio", 0)
-        if cantidad_disponible >= cantidad:
+        if stock >= cantidad:
             estado = "Confirmado"
-            actualizar_inventario(inventario["id"], cantidad, cantidad_disponible)
         else:
             estado = "Sin stock"
 
     total = precio_unit * cantidad
 
     pedido = {
-        "fecha": datetime.now().isoformat(),
+        "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "telefono": telefono,
         "producto": producto,
         "cantidad": cantidad,
@@ -188,9 +215,8 @@ Conversación:
         "total": total,
         "forma_pago": forma_pago,
         "estado": estado,
-        "transcripcion": transcript,
-        "creado_en": datetime.now().isoformat()
+        "transcripcion": transcript
     }
 
-    db.collection("pedidos").add(pedido)
+    guardar_pedido(pedido)
     return JSONResponse({"status": "ok"})
