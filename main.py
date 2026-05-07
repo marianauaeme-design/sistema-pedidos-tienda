@@ -4,9 +4,9 @@ from datetime import datetime
 import os
 import json
 import traceback
-from google import genai
 import gspread
 from google.oauth2.service_account import Credentials
+from groq import Groq
 
 app = FastAPI()
 
@@ -16,27 +16,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-# Usamos GOOGLE_KEY para las credenciales de Google
 google_key = json.loads(os.environ.get("FIREBASE_KEY", "{}"))
-gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
 def get_sheets():
     creds = Credentials.from_service_account_info(google_key, scopes=SCOPES)
     gc = gspread.authorize(creds)
     return gc.open_by_key(SHEET_ID)
-
-def get_config():
-    try:
-        sh = get_sheets()
-        hoja = sh.worksheet("Configuracion")
-        registros = hoja.get_all_records()
-        config = {}
-        for row in registros:
-            config[row.get("Campo", "")] = row.get("Valor", "")
-        return config
-    except Exception as e:
-        print(f"Error config: {e}")
-        return {}
 
 def buscar_en_inventario(producto_nombre):
     try:
@@ -58,7 +44,7 @@ def buscar_en_inventario(producto_nombre):
         return {"disponible": False}
     except Exception as e:
         traceback.print_exc()
-        return {"disponible": False, "error": str(e)}
+        return {"disponible": False}
 
 def guardar_pedido(pedido):
     try:
@@ -78,6 +64,33 @@ def guardar_pedido(pedido):
     except Exception as e:
         traceback.print_exc()
         print(f"Error guardando pedido: {str(e)}")
+
+def extraer_datos_con_groq(transcript):
+    prompt = f"""Analiza esta conversación de una tienda en México y extrae:
+1. El pedido FINAL confirmado por el cliente
+2. La forma de pago mencionada (efectivo o tarjeta)
+
+Responde SOLO con JSON puro sin backticks ni markdown.
+Formato exacto:
+{{
+  "productos": "lista de productos separados por coma",
+  "cantidad_total": numero total de items,
+  "forma_pago": "Efectivo" o "Tarjeta" o "No especificado",
+  "producto_principal": "nombre del primer producto"
+}}
+
+Conversación:
+{transcript}"""
+
+    response = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1
+    )
+    raw = response.choices[0].message.content.strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    print(f"GROQ RAW: {raw}")
+    return json.loads(raw)
 
 @app.get("/")
 def root():
@@ -166,37 +179,16 @@ async def recibir_vapi(request: Request):
     customer = call.get("customer", {})
     telefono = customer.get("number", "Desconocido")
 
-    print(f"TRANSCRIPT: {transcript[:200]}")
     if not transcript:
         return JSONResponse({"status": "ok"})
 
-    prompt = f"""Analiza esta conversación de una tienda en México y extrae:
-1. El pedido FINAL confirmado por el cliente
-2. La forma de pago mencionada (efectivo o tarjeta)
-
-Responde SOLO con JSON puro sin backticks ni markdown.
-Formato exacto:
-{{
-  "productos": "lista de productos separados por coma",
-  "cantidad_total": numero total de items,
-  "forma_pago": "Efectivo" o "Tarjeta" o "No especificado",
-  "producto_principal": "nombre del primer producto"
-}}
-
-Conversación:
-{transcript}"""
+    print(f"TRANSCRIPT: {transcript[:200]}")
 
     try:
-        resp = gemini_client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
-        raw = resp.text.strip().replace("```json", "").replace("```", "").strip()
-        print(f"GEMINI RAW: {raw}")
-        datos = json.loads(raw)
-    except Exception as gemini_error:
+        datos = extraer_datos_con_groq(transcript)
+    except Exception as e:
         traceback.print_exc()
-        print(f"GEMINI ERROR: {gemini_error}")
+        print(f"GROQ ERROR: {e}")
         datos = {
             "productos": "No identificado",
             "cantidad_total": 0,
