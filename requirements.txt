@@ -1,7 +1,7 @@
 fastapi
 uvicorn
-google-genai
 httpx
 python-multipart
 gspread
 google-auth
+groq
