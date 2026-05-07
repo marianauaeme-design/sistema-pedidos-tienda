@@ -1,3 +1,6 @@
+
+Copiar
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime
@@ -7,24 +10,24 @@ import traceback
 from google import genai
 import gspread
 from google.oauth2.service_account import Credentials
-
+ 
 app = FastAPI()
-
+ 
 SHEET_ID = "1pyc0n_FIk6o9519kvSsQVUcZGYvu8qN45FZ5M12W0io"
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
-
+ 
 # Usamos GOOGLE_KEY para las credenciales de Google
 google_key = json.loads(os.environ.get("FIREBASE_KEY", "{}"))
 gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-
+ 
 def get_sheets():
     creds = Credentials.from_service_account_info(google_key, scopes=SCOPES)
     gc = gspread.authorize(creds)
     return gc.open_by_key(SHEET_ID)
-
+ 
 def get_config():
     try:
         sh = get_sheets()
@@ -37,7 +40,7 @@ def get_config():
     except Exception as e:
         print(f"Error config: {e}")
         return {}
-
+ 
 def buscar_en_inventario(producto_nombre):
     try:
         sh = get_sheets()
@@ -59,7 +62,7 @@ def buscar_en_inventario(producto_nombre):
     except Exception as e:
         traceback.print_exc()
         return {"disponible": False, "error": str(e)}
-
+ 
 def guardar_pedido(pedido):
     try:
         sh = get_sheets()
@@ -78,11 +81,11 @@ def guardar_pedido(pedido):
     except Exception as e:
         traceback.print_exc()
         print(f"Error guardando pedido: {str(e)}")
-
+ 
 @app.get("/")
 def root():
     return {"status": "Sistema de Pedidos activo ✅"}
-
+ 
 @app.get("/test-sheets")
 async def test_sheets():
     try:
@@ -92,7 +95,7 @@ async def test_sheets():
     except Exception as e:
         traceback.print_exc()
         return JSONResponse({"ok": False, "error": str(e)})
-
+ 
 @app.get("/precio")
 async def consultar_precio_get(producto: str = ""):
     if not producto:
@@ -114,7 +117,7 @@ async def consultar_precio_get(producto: str = ""):
             "disponible": False,
             "mensaje": f"Lo sentimos, no encontramos {producto} en nuestro inventario."
         })
-
+ 
 @app.post("/precio")
 async def consultar_precio_post(request: Request):
     try:
@@ -131,10 +134,10 @@ async def consultar_precio_post(request: Request):
                 producto = args.get("producto", "")
     except:
         producto = ""
-
+ 
     if not producto:
         return JSONResponse({"result": "No se especificó el producto"})
-
+ 
     inventario = buscar_en_inventario(producto)
     if inventario.get("disponible"):
         precio = inventario.get("precio", 0)
@@ -147,33 +150,33 @@ async def consultar_precio_post(request: Request):
         return JSONResponse({
             "result": f"Lo sentimos, no encontramos {producto} en nuestro inventario."
         })
-
+ 
 @app.post("/vapi")
 async def recibir_vapi(request: Request):
     try:
         body = await request.json()
     except:
         return JSONResponse({"status": "ok"})
-
+ 
     message = body.get("message", {})
     msg_type = message.get("type", "")
-
+ 
     if msg_type != "end-of-call-report":
         return JSONResponse({"status": "ok"})
-
+ 
     transcript = message.get("transcript", "")
     call = message.get("call", {})
     customer = call.get("customer", {})
     telefono = customer.get("number", "Desconocido")
-
+ 
     print(f"TRANSCRIPT: {transcript[:200]}")
     if not transcript:
         return JSONResponse({"status": "ok"})
-
+ 
     prompt = f"""Analiza esta conversación de una tienda en México y extrae:
 1. El pedido FINAL confirmado por el cliente
 2. La forma de pago mencionada (efectivo o tarjeta)
-
+ 
 Responde SOLO con JSON puro sin backticks ni markdown.
 Formato exacto:
 {{
@@ -182,10 +185,10 @@ Formato exacto:
   "forma_pago": "Efectivo" o "Tarjeta" o "No especificado",
   "producto_principal": "nombre del primer producto"
 }}
-
+ 
 Conversación:
 {transcript}"""
-
+ 
     try:
         resp = gemini_client.models.generate_content(
             model="gemini-2.0-flash",
@@ -194,23 +197,25 @@ Conversación:
         raw = resp.text.strip().replace("```json", "").replace("```", "").strip()
         print(f"GEMINI RAW: {raw}")
         datos = json.loads(raw)
-    except Exception:
+    except Exception as gemini_error:
+        traceback.print_exc()
+        print(f"GEMINI ERROR: {gemini_error}")
         datos = {
             "productos": "No identificado",
             "cantidad_total": 0,
             "forma_pago": "No especificado",
             "producto_principal": "No identificado"
         }
-
+ 
     producto = datos.get("productos", "No identificado")
     cantidad = datos.get("cantidad_total", 0)
     forma_pago = datos.get("forma_pago", "No especificado")
     producto_principal = datos.get("producto_principal", producto)
-
+ 
     inventario = buscar_en_inventario(producto_principal)
     estado = "Pendiente"
     precio_unit = 0
-
+ 
     if inventario.get("disponible"):
         stock = inventario.get("stock", 0)
         precio_unit = inventario.get("precio", 0)
@@ -218,9 +223,9 @@ Conversación:
             estado = "Confirmado"
         else:
             estado = "Sin stock"
-
+ 
     total = precio_unit * cantidad
-
+ 
     pedido = {
         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "telefono": telefono,
@@ -231,6 +236,6 @@ Conversación:
         "forma_pago": forma_pago,
         "estado": estado
     }
-
+ 
     guardar_pedido(pedido)
     return JSONResponse({"status": "ok"})
