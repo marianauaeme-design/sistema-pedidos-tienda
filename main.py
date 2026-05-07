@@ -192,6 +192,7 @@ Conversación:
             contents=prompt
         )
         raw = resp.text.strip().replace("```json", "").replace("```", "").strip()
+        print(f"GEMINI RAW: {raw}")
         datos = json.loads(raw)
     except Exception:
         datos = {
