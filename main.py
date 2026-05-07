@@ -72,7 +72,7 @@ def guardar_pedido(pedido):
         ]
         hoja.append_row(row)
     except Exception as e:
-        print(f"Error guardando pedido: {e}")
+        import traceback; traceback.print_exc(); print(f"Error guardando pedido: {str(e)}")
 
 @app.get("/")
 def root():
