@@ -166,6 +166,7 @@ async def recibir_vapi(request: Request):
     customer = call.get("customer", {})
     telefono = customer.get("number", "Desconocido")
 
+    print(f"TRANSCRIPT: {transcript[:200]}")
     if not transcript:
         return JSONResponse({"status": "ok"})
 
