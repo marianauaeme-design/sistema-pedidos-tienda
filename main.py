@@ -228,3 +228,22 @@ async def recibir_vapi(request: Request):
 
     guardar_pedido(pedido)
     return JSONResponse({"status": "ok"})
+
+@app.get("/pedidos")
+async def get_pedidos():
+    try:
+        sh = get_sheets()
+        hoja = sh.worksheet("Pedidos")
+        registros = hoja.get_all_records()
+        return JSONResponse({"pedidos": registros, "total": len(registros)})
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse({"pedidos": [], "error": str(e)})
+
+from fastapi.responses import HTMLResponse
+from pathlib import Path
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    html = Path("dashboard.html").read_text()
+    return HTMLResponse(content=html)
