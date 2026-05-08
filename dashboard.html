@@ -68,9 +68,9 @@ async function cargarPedidos() {
 
 function actualizarStats(pedidos) {
   document.getElementById('total-pedidos').textContent = pedidos.length;
-  document.getElementById('confirmados').textContent = pedidos.filter(p => p.estado === 'Confirmado').length;
-  document.getElementById('pendientes').textContent = pedidos.filter(p => p.estado === 'Pendiente').length;
-  const total = pedidos.reduce((sum, p) => sum + (parseFloat(p.total) || 0), 0);
+  document.getElementById('confirmados').textContent = pedidos.filter(p => p.Estado === 'Confirmado').length;
+  document.getElementById('pendientes').textContent = pedidos.filter(p => p.Estado === 'Pendiente').length;
+  const total = pedidos.reduce((sum, p) => sum + (parseFloat(p.Total) || 0), 0);
   document.getElementById('total-ventas').textContent = '$' + total.toFixed(0);
 }
 
@@ -81,15 +81,15 @@ function renderTabla(pedidos) {
   }
   let html = '<table><thead><tr><th>Fecha</th><th>Teléfono</th><th>Producto</th><th>Cant</th><th>Total</th><th>Pago</th><th>Estado</th><th>Ticket</th></tr></thead><tbody>';
   pedidos.slice().reverse().forEach((p, i) => {
-    const badgeClass = p.estado === 'Confirmado' ? 'badge-confirmado' : p.estado === 'Sin stock' ? 'badge-sinstock' : 'badge-pendiente';
+    const badgeClass = p.Estado === 'Confirmado' ? 'badge-confirmado' : p.Estado === 'Sin stock' ? 'badge-sinstock' : 'badge-pendiente';
     html += `<tr>
-      <td>${p.fecha || ''}</td>
-      <td>${p.telefono || ''}</td>
-      <td>${p.producto || ''}</td>
-      <td>${p.cantidad || 0}</td>
-      <td>$${parseFloat(p.total || 0).toFixed(0)}</td>
-      <td>${p.forma_pago || ''}</td>
-      <td><span class="badge ${badgeClass}">${p.estado || ''}</span></td>
+      <td>${p.Fecha || ''}</td>
+      <td>${p.Telefono || ''}</td>
+      <td>${p.Producto || ''}</td>
+      <td>${p.Cantidad || 0}</td>
+      <td>$${parseFloat(p.Total || 0).toFixed(0)}</td>
+      <td>${p['Forma Pago'] || p.forma_pago || ''}</td>
+      <td><span class="badge ${badgeClass}">${p.Estado || ''}</span></td>
       <td><button class="print-btn" onclick='imprimirTicket(${JSON.stringify(p)})'>🖨 Ticket</button></td>
     </tr>`;
   });
