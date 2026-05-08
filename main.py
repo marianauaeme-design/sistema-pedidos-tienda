@@ -88,18 +88,21 @@ def guardar_pedido(pedido):
 
 def extraer_datos_con_groq(transcript):
     prompt = f"""Analiza esta conversación de una tienda en México y extrae:
-1. El pedido FINAL confirmado por el cliente
-2. La forma de pago mencionada (efectivo o tarjeta)
+1. El nombre del cliente
+2. El pedido FINAL confirmado con cantidad de cada producto
+3. La forma de pago mencionada (efectivo o tarjeta)
 
 Responde SOLO con JSON puro sin backticks ni markdown.
 Formato exacto:
 {{
-  "nombre_cliente": "nombre del cliente",
-  "productos": "lista de productos separados por coma",
-  "cantidad_total": numero total de items,
+  "nombre_cliente": "nombre del cliente o No especificado",
+  "productos": "(2) Papas, (1) Chocolate, (3) Coca Cola",
+  "cantidad_total": numero total de todos los items sumados,
   "forma_pago": "Efectivo" o "Tarjeta" o "No especificado",
   "producto_principal": "nombre del primer producto"
 }}
+
+Ejemplo: si pidieron 2 papas y 1 chocolate, productos seria: "(2) Papas, (1) Chocolate"
 
 Conversación:
 {transcript}"""
