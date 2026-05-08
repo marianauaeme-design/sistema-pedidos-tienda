@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sistema de Pedidos - Tienda Don Pepe</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: Arial, sans-serif; background: #f5f5f5; color: #333; }
+  header { background: #2c7a4b; color: white; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 20px; }
+  header span { font-size: 13px; opacity: 0.8; }
+  .container { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+  .stat-card { background: white; border-radius: 8px; padding: 16px; text-align: center; border: 1px solid #e0e0e0; }
+  .stat-card .num { font-size: 28px; font-weight: bold; color: #2c7a4b; }
+  .stat-card .label { font-size: 12px; color: #888; margin-top: 4px; }
+  .table-card { background: white; border-radius: 8px; border: 1px solid #e0e0e0; overflow: hidden; }
+  .table-card h2 { padding: 16px 20px; font-size: 16px; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; }
+  .refresh-btn { background: #2c7a4b; color: white; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; min-width: 900px; }
+  th { background: #f9f9f9; padding: 10px 12px; text-align: left; font-size: 12px; color: #666; border-bottom: 1px solid #e0e0e0; white-space: nowrap; }
+  td { padding: 10px 12px; font-size: 13px; border-bottom: 1px solid #f0f0f0; }
+  tr:hover { background: #f9f9f9; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+  .badge-confirmado { background: #d4edda; color: #155724; }
+  .badge-pendiente { background: #fff3cd; color: #856404; }
+  .badge-sinstock { background: #f8d7da; color: #721c24; }
+  .print-btn { background: #2c7a4b; color: white; border: none; padding: 5px 12px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+  .print-btn:hover { background: #235f3a; }
+  .loading { text-align: center; padding: 40px; color: #888; }
+  @media (max-width: 600px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛒 Sistema de Pedidos - Tienda Don Pepe</h1>
+  <span id="ultima-act">Cargando...</span>
+</header>
+<div class="container">
+  <div class="stats">
+    <div class="stat-card"><div class="num" id="total-pedidos">-</div><div class="label">Total pedidos</div></div>
+    <div class="stat-card"><div class="num" id="confirmados">-</div><div class="label">Confirmados</div></div>
+    <div class="stat-card"><div class="num" id="pendientes">-</div><div class="label">Pendientes</div></div>
+    <div class="stat-card"><div class="num" id="total-ventas">-</div><div class="label">Total ventas</div></div>
+  </div>
+  <div class="table-card">
+    <h2>Pedidos recientes <button class="refresh-btn" onclick="cargarPedidos()">↻ Actualizar</button></h2>
+    <div class="table-wrap">
+      <div id="tabla-container"><div class="loading">Cargando pedidos...</div></div>
+    </div>
+  </div>
+</div>
+<script>
+async function cargarPedidos() {
+  try {
+    const res = await fetch('/pedidos');
+    const data = await res.json();
+    renderTabla(data.pedidos);
+    actualizarStats(data.pedidos);
+    document.getElementById('ultima-act').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
+  } catch(e) {
+    document.getElementById('tabla-container').innerHTML = '<div class="loading">Error cargando pedidos.</div>';
+  }
+}
+
+function actualizarStats(pedidos) {
+  document.getElementById('total-pedidos').textContent = pedidos.length;
+  document.getElementById('confirmados').textContent = pedidos.filter(p => p.Estado === 'Confirmado').length;
+  document.getElementById('pendientes').textContent = pedidos.filter(p => p.Estado === 'Pendiente').length;
+  const total = pedidos.reduce((sum, p) => sum + (parseFloat(p.Total) || 0), 0);
+  document.getElementById('total-ventas').textContent = '$' + total.toFixed(0);
+}
+
+function renderTabla(pedidos) {
+  if (!pedidos || pedidos.length === 0) {
+    document.getElementById('tabla-container').innerHTML = '<div class="loading">No hay pedidos aún.</div>';
+    return;
+  }
+  let html = `<table><thead><tr>
+    <th>Nombre</th><th>Fecha</th><th>Teléfono</th><th>Producto</th>
+    <th>Cant</th><th>Precio Unit</th><th>Total</th><th>Pago</th><th>Estado</th><th>Ticket</th>
+  </tr></thead><tbody>`;
+  
+  pedidos.slice().reverse().forEach(p => {
+    const badgeClass = p.Estado === 'Confirmado' ? 'badge-confirmado' : p.Estado === 'Sin stock' ? 'badge-sinstock' : 'badge-pendiente';
+    html += `<tr>
+      <td>${p.Nombre || '-'}</td>
+      <td>${p.Fecha || ''}</td>
+      <td>${p.Telefono || ''}</td>
+      <td>${p.Producto || ''}</td>
+      <td>${p.Cantidad || 0}</td>
+      <td>${p['Precio Unit'] || '-'}</td>
+      <td>$${parseFloat(p.Total || 0).toFixed(0)}</td>
+      <td>${p['Forma de pago'] || '-'}</td>
+      <td><span class="badge ${badgeClass}">${p.Estado || ''}</span></td>
+      <td><button class="print-btn" onclick='imprimirTicket(${JSON.stringify(p)})'>🖨 Ticket</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('tabla-container').innerHTML = html;
+}
+
+function imprimirTicket(p) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: [58, 160] });
+  const w = 58;
+  let y = 5;
+
+  doc.setFontSize(9); doc.setFont('courier', 'bold');
+  doc.text('TIENDA DON PEPE', w/2, y, { align: 'center' }); y += 4;
+  doc.setFont('courier', 'normal'); doc.setFontSize(7);
+  doc.text('Calle Juarez #45, Col. Centro', w/2, y, { align: 'center' }); y += 3.5;
+  doc.text('Tultepec, Mexico', w/2, y, { align: 'center' }); y += 3.5;
+  doc.text('Tel: 729-123-4567', w/2, y, { align: 'center' }); y += 5;
+
+  doc.setLineDashPattern([1,1], 0);
+  doc.line(2, y, w-2, y); y += 4;
+
+  doc.setFontSize(7);
+  doc.text('Cliente: ' + (p.Nombre || 'No especificado'), 3, y); y += 3.5;
+  doc.text('Fecha: ' + (p.Fecha || ''), 3, y); y += 3.5;
+  doc.text('Tel: ' + (p.Telefono || ''), 3, y); y += 5;
+
+  doc.line(2, y, w-2, y); y += 4;
+
+  doc.setFont('courier', 'bold');
+  doc.text('Producto', 3, y);
+  doc.text('Cant', 36, y);
+  doc.text('Total', 46, y);
+  y += 2; doc.line(2, y, w-2, y); y += 3;
+
+  doc.setFont('courier', 'normal');
+  const productos = (p.Producto || '').split(',');
+  productos.forEach(prod => {
+    const txt = prod.trim().substring(0, 22);
+    doc.text(txt, 3, y);
+    y += 4;
+  });
+  doc.text('', 36, y-4);
+  doc.text(String(p.Cantidad || 0), 36, y-4);
+  doc.text('$' + parseFloat(p.Total || 0).toFixed(0), 46, y-4);
+
+  y += 1; doc.line(2, y, w-2, y); y += 4;
+
+  doc.setFont('courier', 'bold'); doc.setFontSize(7);
+  doc.text('Precios: ' + (p['Precio Unit'] || '-'), 3, y); y += 5;
+
+  doc.setFontSize(10);
+  doc.text('TOTAL: $' + parseFloat(p.Total || 0).toFixed(0) + ' MXN', w/2, y, { align: 'center' }); y += 5;
+
+  doc.setFont('courier', 'normal'); doc.setFontSize(7);
+  doc.text('Pago: ' + (p['Forma de pago'] || 'No especificado'), w/2, y, { align: 'center' }); y += 5;
+
+  doc.setLineDashPattern([1,1], 0);
+  doc.line(2, y, w-2, y); y += 4;
+
+  doc.setFont('courier', 'bold'); doc.setFontSize(8);
+  doc.text('¡Gracias por su compra!', w/2, y, { align: 'center' }); y += 4;
+  doc.setFont('courier', 'normal'); doc.setFontSize(6);
+  doc.text('Conserve su ticket', w/2, y, { align: 'center' });
+
+  doc.save('ticket-' + (p.Nombre || 'pedido') + '.pdf');
+}
+
+cargarPedidos();
+setInterval(cargarPedidos, 60000);
+</script>
+</body>
+</html>
