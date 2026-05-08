@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from pathlib import Path
 from datetime import datetime
 import os
 import json
@@ -46,17 +47,37 @@ def buscar_en_inventario(producto_nombre):
         traceback.print_exc()
         return {"disponible": False}
 
+def buscar_precios_productos(productos_str):
+    """Busca precios de múltiples productos y retorna desglose"""
+    productos = [p.strip() for p in productos_str.split(",")]
+    desglose = []
+    total = 0
+    
+    for prod in productos:
+        inv = buscar_en_inventario(prod)
+        if inv.get("disponible"):
+            precio = inv.get("precio", 0)
+            nombre = inv.get("nombre", prod)
+            desglose.append(f"{nombre}: ${precio:.0f}")
+            total += precio
+        else:
+            desglose.append(f"{prod}: $0")
+    
+    return ", ".join(desglose), total
+
 def guardar_pedido(pedido):
     try:
         sh = get_sheets()
         hoja = sh.worksheet("Pedidos")
         row = [
+            pedido.get("nombre_cliente", ""),
             pedido.get("fecha", ""),
             pedido.get("telefono", ""),
             pedido.get("producto", ""),
             pedido.get("cantidad", 0),
-            pedido.get("precio_unit", 0),
+            pedido.get("precio_unit", ""),
             pedido.get("total", 0),
+            pedido.get("forma_pago", ""),
             pedido.get("estado", "")
         ]
         hoja.append_row(row)
@@ -73,6 +94,7 @@ def extraer_datos_con_groq(transcript):
 Responde SOLO con JSON puro sin backticks ni markdown.
 Formato exacto:
 {{
+  "nombre_cliente": "nombre del cliente",
   "productos": "lista de productos separados por coma",
   "cantidad_total": numero total de items,
   "forma_pago": "Efectivo" o "Tarjeta" o "No especificado",
@@ -105,6 +127,22 @@ async def test_sheets():
     except Exception as e:
         traceback.print_exc()
         return JSONResponse({"ok": False, "error": str(e)})
+
+@app.get("/pedidos")
+async def get_pedidos():
+    try:
+        sh = get_sheets()
+        hoja = sh.worksheet("Pedidos")
+        registros = hoja.get_all_records()
+        return JSONResponse({"pedidos": registros, "total": len(registros)})
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse({"pedidos": [], "error": str(e)})
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    html = Path("dashboard.html").read_text()
+    return HTMLResponse(content=html)
 
 @app.get("/precio")
 async def consultar_precio_get(producto: str = ""):
@@ -196,54 +234,37 @@ async def recibir_vapi(request: Request):
             "producto_principal": "No identificado"
         }
 
+    nombre_cliente = datos.get("nombre_cliente", "No especificado")
     producto = datos.get("productos", "No identificado")
     cantidad = datos.get("cantidad_total", 0)
     forma_pago = datos.get("forma_pago", "No especificado")
     producto_principal = datos.get("producto_principal", producto)
 
+    # Buscar precios de todos los productos
+    precio_desglose, total_calculado = buscar_precios_productos(producto)
+
+    # Verificar inventario del producto principal
     inventario = buscar_en_inventario(producto_principal)
     estado = "Pendiente"
-    precio_unit = 0
 
     if inventario.get("disponible"):
         stock = inventario.get("stock", 0)
-        precio_unit = inventario.get("precio", 0)
         if stock >= cantidad:
             estado = "Confirmado"
         else:
             estado = "Sin stock"
 
-    total = precio_unit * cantidad
-
     pedido = {
+        "nombre_cliente": nombre_cliente,
         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "telefono": telefono,
         "producto": producto,
         "cantidad": cantidad,
-        "precio_unit": precio_unit,
-        "total": total,
+        "precio_unit": precio_desglose,
+        "total": total_calculado,
         "forma_pago": forma_pago,
         "estado": estado
     }
 
     guardar_pedido(pedido)
     return JSONResponse({"status": "ok"})
-
-@app.get("/pedidos")
-async def get_pedidos():
-    try:
-        sh = get_sheets()
-        hoja = sh.worksheet("Pedidos")
-        registros = hoja.get_all_records()
-        return JSONResponse({"pedidos": registros, "total": len(registros)})
-    except Exception as e:
-        traceback.print_exc()
-        return JSONResponse({"pedidos": [], "error": str(e)})
-
-from fastapi.responses import HTMLResponse
-from pathlib import Path
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard():
-    html = Path("dashboard.html").read_text()
-    return HTMLResponse(content=html)
